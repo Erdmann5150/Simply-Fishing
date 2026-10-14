@@ -36,6 +36,7 @@ local current           -- last action written to the button
 local applied = {}      -- cvar -> the value this addon last set, to tell our changes from the player's
 local watchUntil = 0    -- item-cast events are only listened to until this time
 local watching = false
+local drinking          -- { item, time }: sitting with a tea, waiting to become Relaxed
 local WatchItemEvents, CheckInstance -- defined with the event code below
 
 local function Print(msg)
@@ -95,6 +96,14 @@ local function ForEachEntry(fn)
 	for _, kind in ipairs(ns.FISH_KINDS) do
 		for _, e in ipairs(db.fish[kind].items) do fn(e) end
 	end
+	for _, kind in ipairs(ns.SUPPLY_KINDS) do
+		for _, e in ipairs(db.supplies[kind].items) do fn(e) end
+	end
+end
+
+-- A group with an on/off switch and its own list: a fish buff, "phial" or "tea".
+local function GroupTable(kind)
+	return kind and (db.fish[kind] or db.supplies[kind])
 end
 
 local function Rebuild()
@@ -110,6 +119,9 @@ local function Rebuild()
 	for _, e in ipairs(db.oversizedItems) do groupOf[e.item] = "oversized" end
 	for _, kind in ipairs(ns.FISH_KINDS) do
 		for _, e in ipairs(db.fish[kind].items) do groupOf[e.item] = kind end
+	end
+	for _, kind in ipairs(ns.SUPPLY_KINDS) do
+		for _, e in ipairs(db.supplies[kind].items) do groupOf[e.item] = kind end
 	end
 end
 
@@ -138,6 +150,13 @@ local function ApplyDefaults()
 		g.mode = g.mode or "auto" -- "auto" = Automatic (most to spare first), "manual" = your order
 		g.items = g.items or {}
 		db.fish[kind] = g
+	end
+	db.supplies = db.supplies or {}
+	for _, kind in ipairs(ns.SUPPLY_KINDS) do
+		local g = db.supplies[kind] or {}
+		if g.on == nil then g.on = true end
+		g.items = g.items or {}
+		db.supplies[kind] = g
 	end
 	if db.raft == nil and not db.raftCleared then
 		db.raft = { item = ns.seedRafts[1], toy = true }
@@ -174,10 +193,52 @@ local function Threshold(kind)
 	return db.threshold
 end
 
--- Seconds of buff left; math.huge = active and not worth refreshing; nil = absent.
-local function Remaining(e, threshold)
-	local sid = e.aura or ItemSpell(e.item)
+-- The Relaxed buff from a tea, found by its learned ID (any language) or by name.
+local function RelaxedAura()
+	local sid = db.relaxedAura
 	local aura = sid and FindAura(sid)
+	if not aura then
+		aura = C_UnitAuras.GetAuraDataBySpellName("player", ns.RELAXED, "HELPFUL")
+		if aura and aura.spellId and not IsSecret(aura.spellId) then db.relaxedAura = aura.spellId end
+	end
+	return aura
+end
+
+-- Is the tea's drink (sitting and drinking) still going?
+local function DrinkActive(itemID)
+	local sid = ItemSpell(itemID)
+	return sid ~= nil and FindAura(sid) ~= nil
+end
+
+-- Seconds until a tea you're drinking makes you Relaxed, or nil when not waiting
+-- (Relaxed, stood up early, or waited long enough). Standing up is seen as the
+-- drink ending after it was seen, or moving; if the drink's buff can't be seen
+-- at all, the key simply waits the full time.
+local function RelaxingLeft()
+	if not drinking then return nil end
+	local elapsed = GetTime() - drinking.time
+	local active = DrinkActive(drinking.item)
+	if active then drinking.seen = true end
+	local speed = GetUnitSpeed("player")
+	local moving = not IsSecret(speed) and speed and speed > 0
+	if elapsed > ns.TEA_WAIT or RelaxedAura() or (drinking.seen and not active) or moving then
+		drinking = nil
+		return nil
+	end
+	return math.max(0, ns.TEA_SECONDS - elapsed)
+end
+ns.RelaxingLeft = RelaxingLeft
+
+-- Seconds of buff left; math.huge = active and not worth refreshing; nil = absent.
+-- A tea's buff is Relaxed, never the drink itself.
+local function Remaining(e, threshold)
+	local aura
+	if groupOf[e.item] == "tea" then
+		aura = RelaxedAura()
+	else
+		local sid = e.aura or ItemSpell(e.item)
+		aura = sid and FindAura(sid)
+	end
 	if aura then
 		local exp, dur = aura.expirationTime, aura.duration
 		if IsSecret(exp) or IsSecret(dur) then return math.huge end
@@ -332,6 +393,45 @@ function ns.FishOrder(kind)
 	return out
 end
 
+-- Any group's items in priority order: fish follow their order mode; Phial and
+-- Tea use your order (arrows).
+function ns.GroupOrder(kind)
+	if db.fish[kind] then return ns.FishOrder(kind) end
+	local out = {}
+	for _, e in ipairs(db.supplies[kind].items) do
+		if Visible(e) then out[#out + 1] = e end
+	end
+	return out
+end
+
+-- The name of a flask or phial you have up that isn't one of your listed phials.
+-- A new phial would replace it, so the Phial group waits until it's gone.
+local function OtherFlask()
+	local mine = {}
+	local function Mark(sid)
+		if not sid then return end
+		mine[sid] = true
+		local n = C_Spell.GetSpellName(sid)
+		if n then mine[n] = true end
+	end
+	for _, e in ipairs(db.supplies.phial.items) do
+		Mark(ItemSpell(e.item))
+		Mark(e.aura)
+		local n = C_Item.GetItemNameByID(e.item)
+		if n then mine[n] = true end
+	end
+	for i = 1, MAX_AURAS do
+		local a = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
+		if not a then return nil end
+		local name, sid = a.name, a.spellId
+		if name and not IsSecret(name) and not IsSecret(sid) and not mine[sid] and not mine[name] then
+			local low = name:lower()
+			if low:find("flask") or low:find("phial") then return name end
+		end
+	end
+end
+ns.OtherFlask = OtherFlask
+
 -- Right after one item in a group is used, give its buff time to show up
 -- instead of trying the next item in the group (which would spend a second one).
 local function Paused(group)
@@ -349,6 +449,18 @@ local function Evaluate()
 	if db.bobber and NeedsRefresh(db.bobber, db.threshold) and Ready(db.bobber) then return db.bobber end
 	if db.oversized and not Paused("oversized") and not AnyActive(db.oversizedItems, db.threshold) then
 		local e = FirstReady(db.oversizedItems)
+		if e then return e end
+	end
+	-- Phial and Tea come before fish: they last 30-60 minutes, and a fish
+	-- buff would tick away while you sit and drink.
+	local phial = db.supplies.phial
+	if phial.on and not Paused("phial") and not AnyActive(phial.items, db.threshold) and not OtherFlask() then
+		local e = FirstReady(ns.GroupOrder("phial"))
+		if e then return e end
+	end
+	local tea = db.supplies.tea
+	if tea.on and not IsSwimming() and not Paused("tea") and not AnyActive(tea.items, db.threshold) then
+		local e = FirstReady(ns.GroupOrder("tea"))
 		if e then return e end
 	end
 	-- Fish buffs: one fish keeps each buff up, picked in priority order.
@@ -402,9 +514,9 @@ end
 -- One status for a whole buff group ("lures" or a fish kind): time left and the
 -- item giving it, or why nothing is. Returns text, color, active entry.
 function ns.BuffStatus(group)
-	local fishGroup = db.fish[group]
-	if fishGroup and not fishGroup.on then return "Off", GREY end
-	local list = fishGroup and ns.FishOrder(group) or db.lures
+	local g = GroupTable(group)
+	if g and not g.on then return "Off", GREY end
+	local list = g and ns.GroupOrder(group) or db.lures
 	if #list == 0 then return nil end
 	local best, bestLeft
 	local last = groupUsed[group] and entryByItem[groupUsed[group].item]
@@ -417,6 +529,11 @@ function ns.BuffStatus(group)
 		if bestLeft == math.huge then return "Active", GREEN, best end
 		return TimeLeft(bestLeft), bestLeft >= db.threshold and GREEN or YELLOW, best
 	end
+	if group == "tea" then
+		local wait = RelaxingLeft()
+		if wait then return ("Relaxing %ds"):format(math.ceil(wait)), YELLOW end
+	end
+	if group == "phial" and OtherFlask() then return "Other Flask Up", GREY end
 	if FirstReady(list) then return "Not Active", YELLOW end
 	return "None Usable", RED
 end
@@ -483,10 +600,55 @@ local function TakeSnapshot(itemID)
 	ForEachBuff(function(sid, exp) snapshot[sid] = exp end)
 end
 
+-- How to give a skipped item another try, for the "No Buff Found" message.
+local function RetryHint(itemID)
+	local g = groupOf[itemID]
+	if GroupTable(g) then
+		return ("Drag it onto the %s name again to retry."):format(ns.FISH_LABELS[g] or ns.SUPPLY_LABELS[g])
+	end
+	return "Remove and re-add it to try again."
+end
+
+-- A tea is checked once you've had time to become Relaxed. Off English clients
+-- the first tea also teaches the addon which buff Relaxed is.
+local function VerifyTea(itemID)
+	local e = entryByItem[itemID]
+	if not e then return end
+	if RelaxedAura() then
+		e.noBuff = nil
+		return Changed()
+	end
+	local drink = ItemSpell(itemID)
+	local drinkName = drink and C_Spell.GetSpellName(drink)
+	local learned
+	if snapshot and snapItem == itemID then
+		ForEachBuff(function(sid, exp)
+			-- Relaxed lasts an hour; the 20-second drink never qualifies.
+			local before = snapshot[sid]
+			if not learned and sid ~= drink and C_Spell.GetSpellName(sid) ~= drinkName
+				and exp > 0 and exp - GetTime() > 60 and (before == nil or exp > before + 1) then
+				learned = sid
+			end
+		end)
+	end
+	if learned then
+		db.relaxedAura = learned
+		Print(("Learned that %s gives %s."):format(ItemLabel(itemID), C_Spell.GetSpellName(learned) or learned))
+	elseif DrinkActive(itemID) then
+		-- Still seated past the mark and nothing new: this one doesn't give Relaxed.
+		e.noBuff = true
+		Print(("%s didn't make you Relaxed, so it will be skipped. %s"):format(ItemLabel(itemID), RetryHint(itemID)))
+	else
+		Debug("%s: you stood up before becoming Relaxed.", ItemLabel(itemID))
+	end
+	Changed()
+end
+
 -- If an item's buff isn't its own use-spell, learn it from what changed.
 local function VerifyUse(itemID)
 	local e = entryByItem[itemID]
 	if not e or itemID == (db.raft and db.raft.item) then return end
+	if groupOf[itemID] == "tea" then return VerifyTea(itemID) end
 	if Remaining(e) ~= nil then
 		e.noBuff = nil
 		return
@@ -503,8 +665,8 @@ local function VerifyUse(itemID)
 		Print(("Learned that %s gives %s."):format(ItemLabel(itemID), C_Spell.GetSpellName(learned) or learned))
 	else
 		e.noBuff = true
-		Print(("%s didn't give a buff the addon can track, so it will be skipped. Remove and re-add it to try again.")
-			:format(ItemLabel(itemID)))
+		Print(("%s didn't give a buff the addon can track, so it will be skipped. %s")
+			:format(ItemLabel(itemID), RetryHint(itemID)))
 	end
 	Changed()
 end
@@ -517,6 +679,7 @@ local function ExplainableMiss(itemID)
 	local speed = GetUnitSpeed("player")
 	if not IsSecret(speed) and speed and speed > 0 then return "moving" end
 	if IsFalling() then return "falling" end
+	if groupOf[itemID] == "tea" and IsSwimming() then return "swimming" end
 	if UnitCastingInfo("player") or UnitChannelInfo("player") then return "another cast" end
 	if OnCooldown(itemID) then return "item cooldown" end
 end
@@ -603,9 +766,11 @@ btn:SetAttribute("type", "spell")
 btn:SetAttribute("spell", ns.FISHING_SPELL)
 btn:Hide()
 
--- An action is an entry table (use that item), "dismount", "sleep", or nil (cast Fishing).
+-- An action is an entry table (use that item), "dismount", "sleep", "relaxing"
+-- (sitting with a tea: the key waits, since casting would stand you up), or nil (cast Fishing).
 local function ChooseAction()
 	if db.asleep then return "sleep" end
+	if RelaxingLeft() then return "relaxing" end
 	if db.dismount and IsMounted() and not IsFlying() then return "dismount" end
 	return Evaluate()
 end
@@ -613,6 +778,7 @@ end
 local function ActionLabel(a)
 	if a == "sleep" then return "Nothing (Sleeping)" end
 	if a == "dismount" then return "Dismount" end
+	if a == "relaxing" then return ("Wait, Relaxing (%ds)"):format(math.ceil(RelaxingLeft() or 0)) end
 	if a then return "Use " .. ItemLabel(a.item) end
 	return "Cast " .. (fishingName or "Fishing")
 end
@@ -621,8 +787,8 @@ local function Apply(a)
 	local key = type(a) == "table" and a.item or a or 0
 	if key == current then return end
 	current = key
-	if a == "sleep" then
-		btn:SetAttribute("type", nil) -- the key does nothing while asleep
+	if a == "sleep" or a == "relaxing" then
+		btn:SetAttribute("type", nil) -- the key does nothing while asleep or finishing a tea
 	elseif a == "dismount" then
 		btn:SetAttribute("type", "macro")
 		btn:SetAttribute("macrotext", "/dismount")
@@ -834,12 +1000,34 @@ local classCache = {} -- itemID -> "perception", "skill", "lure" or false, for t
 local RECIPE_CLASS = (Enum and Enum.ItemClass and Enum.ItemClass.Recipe) or 9
 local fullWarned = {} -- lures already reported as not fitting, this session
 
+-- Every line of an item's tooltip, lowercased. A tea's Relaxed line isn't part
+-- of its Use text, so it's only found here.
+local function TooltipText(itemID)
+	if not (C_TooltipInfo and C_TooltipInfo.GetItemByID) then return "" end
+	local data = C_TooltipInfo.GetItemByID(itemID)
+	local parts = {}
+	for _, line in ipairs(data and data.lines or {}) do
+		local t = line.leftText
+		if type(t) == "string" and not IsSecret(t) then parts[#parts + 1] = t end
+	end
+	return table.concat(parts, " "):lower()
+end
+
+local function HasAny(text, words)
+	for _, w in ipairs(words) do
+		if text:find(w, 1, true) then return true end
+	end
+	return false
+end
+
 -- What an item is for: a fish thrown back for "perception" or "skill", a fishing
--- "lure", or nil if neither (or not loaded yet). Descriptions are read in English.
+-- "lure", a gathering "phial", a "tea" that makes you Relaxed, or nil if none of
+-- those (or not loaded yet). Descriptions are read in English.
 local function Classify(itemID)
 	local c = classCache[itemID]
 	if c ~= nil then return c or nil end
 	local kind = ns.KNOWN_FISH[itemID] or (ns.KNOWN_LURES[itemID] and "lure")
+		or (ns.KNOWN_PHIALS[itemID] and "phial") or (ns.KNOWN_TEAS[itemID] and "tea")
 	if not kind then
 		if not C_Item.IsItemDataCachedByID(itemID) then
 			C_Item.RequestLoadItemDataByID(itemID)
@@ -866,7 +1054,17 @@ local function Classify(itemID)
 			return nil
 		end
 		local low, lowName = desc:lower(), name:lower()
-		if low:find("throw") then
+		local isPhialName = lowName:find("phial") or lowName:find("flask")
+		local tip = (low:find("seated") or isPhialName) and TooltipText(itemID) or ""
+		local relaxed = ns.RELAXED:lower()
+		if (low:find(relaxed, 1, true) or tip:find(relaxed, 1, true)) and (low:find("drink") or low:find("seated")) then
+			-- "If you spend at least 10 seconds drinking, you will become Relaxed..."
+			kind = "tea"
+		elseif isPhialName and HasAny(low .. " " .. tip, ns.PHIAL_STATS)
+			and not HasAny(low .. " " .. tip, ns.CRAFTING_STATS) then
+			-- A gathering phial (Finesse, Perception or Deftness), not a crafting one.
+			kind = "phial"
+		elseif low:find("throw") then
 			if desc:find(ns.FISH_PATTERNS.perception) then
 				kind = "perception"
 			elseif desc:find(ns.FISH_PATTERNS.skill) then
@@ -896,10 +1094,12 @@ local function FindList(id)
 			if e.item == id then return key, db[key], i end
 		end
 	end
-	for _, kind in ipairs(ns.FISH_KINDS) do
-		local items = db.fish[kind].items
-		for i, e in ipairs(items) do
-			if e.item == id then return kind, items, i end
+	for _, kinds in ipairs({ ns.FISH_KINDS, ns.SUPPLY_KINDS }) do
+		for _, kind in ipairs(kinds) do
+			local items = GroupTable(kind).items
+			for i, e in ipairs(items) do
+				if e.item == id then return kind, items, i end
+			end
 		end
 	end
 end
@@ -907,12 +1107,24 @@ end
 local function ListLabel(key)
 	if key == "lures" then return "Lures" end
 	if key == "baits" then return "Other Baits" end
-	return ns.FISH_LABELS[key]
+	return ns.FISH_LABELS[key] or ns.SUPPLY_LABELS[key]
+end
+
+-- Where a group lives in the settings window, for chat messages.
+local function GroupLabel(kind)
+	if db.fish[kind] then return "Fish Buffs: " .. ns.FISH_LABELS[kind] end
+	return "Phial and Tea: " .. ns.SUPPLY_LABELS[kind]
 end
 
 -- A fish or lure found in your bags for the first time.
 local function Discover(kind, itemID, quality)
 	if FindList(itemID) then return end
+	if db.supplies[kind] then
+		local g = db.supplies[kind]
+		g.items[#g.items + 1] = { item = itemID, enabled = true }
+		Print(("Found %s (%s)."):format(ItemLabel(itemID), ns.SUPPLY_LABELS[kind]))
+		return true
+	end
 	if kind == "lure" or kind == "bait" then
 		if removed[itemID] then return end
 		local key = kind == "lure" and "lures" or "baits"
@@ -947,16 +1159,22 @@ end
 function ns.ScanBags()
 	if not db or db.asleep then return end
 	local changed = false
-	-- A Perception or Skill fish in Other Baits belongs under its buff.
-	for i = #db.baits, 1, -1 do
-		local e = db.baits[i]
-		local kind = Classify(e.item)
-		if kind and db.fish[kind] then
-			table.remove(db.baits, i)
-			e.enabled = true
-			table.insert(db.fish[kind].items, e)
-			Print(("Moved %s to Fish Buffs: %s."):format(ItemLabel(e.item), ns.FISH_LABELS[kind]))
-			changed = true
+	-- A Perception or Skill fish in Other Baits belongs under its buff, and a
+	-- phial or tea added to Lures or Other Baits (e.g. before 1.1) under its group.
+	for _, key in ipairs({ "lures", "baits" }) do
+		local list = db[key]
+		for i = #list, 1, -1 do
+			local e = list[i]
+			local kind = Classify(e.item)
+			local g = GroupTable(kind)
+			if g and (key == "baits" or db.supplies[kind]) then
+				table.remove(list, i)
+				e.enabled = true
+				if kind == "tea" then e.aura, e.noBuff = nil, nil end -- it learned the drink, not Relaxed
+				table.insert(g.items, e)
+				Print(("Moved %s to %s."):format(ItemLabel(e.item), GroupLabel(kind)))
+				changed = true
+			end
 		end
 	end
 	local seen = {}
@@ -980,6 +1198,7 @@ end
 local function EntryCount()
 	local n = #db.lures + #db.baits
 	for _, kind in ipairs(ns.FISH_KINDS) do n = n + #db.fish[kind].items end
+	for _, kind in ipairs(ns.SUPPLY_KINDS) do n = n + #db.supplies[kind].items end
 	return n
 end
 
@@ -1014,7 +1233,8 @@ function ns.Rescan(verbose)
 				local _, sid = C_Item.GetItemSpell(id)
 				local desc = sid and C_Spell.GetSpellDescription(sid) or ""
 				local text = (name .. " " .. desc):lower()
-				if ns.KNOWN_LURES[id] or ns.KNOWN_FISH[id] or text:find("lure") or text:find("throw")
+				if ns.KNOWN_LURES[id] or ns.KNOWN_FISH[id] or ns.KNOWN_PHIALS[id] or ns.KNOWN_TEAS[id]
+					or text:find("lure") or text:find("throw") or text:find("phial") or text:find(" tea")
 					or (sid and (text:find("fish") or text:find("catch"))) then
 					shown = shown + 1
 					local kind, where = classCache[id], FindList(id)
@@ -1039,7 +1259,7 @@ function ns.Rescan(verbose)
 			end
 		end
 	end
-	if shown == 0 then Print("No lure- or fish-like items found in your bags.") end
+	if shown == 0 then Print("No lure-, fish-, phial- or tea-like items found in your bags.") end
 end
 
 function ns.ScanReport()
@@ -1053,16 +1273,15 @@ function ns.AddItem(list, itemID)
 	local where = FindList(id)
 	if where then return false, ("%s is already in %s."):format(ItemLabel(id), ListLabel(where)) end
 	removed[id] = nil
-	if list == "baits" then
-		local kind = Classify(id)
-		if kind == "lure" then list = "lures" end
-		if kind and db.fish[kind] then
-			local g = db.fish[kind]
-			g.items[#g.items + 1] = { item = id, enabled = true }
-			Rebuild()
-			Changed()
-			return true, ("%s gives %s, so it was added under Fish Buffs."):format(ItemLabel(id), ns.FISH_LABELS[kind])
-		end
+	local kind = Classify(id)
+	if list == "baits" and kind == "lure" then list = "lures" end
+	-- Fish dropped on Other Baits, and phials or teas dropped on either list, go to their group.
+	if GroupTable(kind) and (list == "baits" or db.supplies[kind]) then
+		local g = GroupTable(kind)
+		g.items[#g.items + 1] = { item = id, enabled = true }
+		Rebuild()
+		Changed()
+		return true, ("%s was added under %s."):format(ItemLabel(id), GroupLabel(kind))
 	end
 	local max = list == "lures" and ns.MAX_LURES or ns.MAX_BAITS
 	if #db[list] >= max then return false, ("You can add up to %d to %s."):format(max, ListLabel(list)) end
@@ -1076,35 +1295,48 @@ function ns.AddItem(list, itemID)
 	return true
 end
 
--- Dragging an item onto a buff adds it there (moving it from any other list),
--- for fish the scan didn't recognize.
-function ns.AddFish(kind, itemID)
+-- Dragging an item onto a group's name (a fish buff, Phial or Tea) adds it
+-- there, moving it from any other list, for items the scan didn't recognize.
+-- Dragging one that's already there gives it another try if it was being skipped.
+function ns.AddToGroup(kind, itemID)
 	local id, err = Validate(itemID)
 	if not id then return false, err end
 	local where, items, i = FindList(id)
-	if where == kind then return false, ("%s is already in %s."):format(ItemLabel(id), ns.FISH_LABELS[kind]) end
+	local label = ListLabel(kind)
+	if where == kind then
+		local e = items[i]
+		if e.noBuff or backoff[id] then
+			e.noBuff, backoff[id], strikes[id] = nil, nil, nil
+			Changed()
+			return true, ("%s will be tried again."):format(ItemLabel(id))
+		end
+		return false, ("%s is already in %s."):format(ItemLabel(id), label)
+	end
 	local e = { item = id, enabled = true }
 	if items then
 		e = table.remove(items, i)
 		e.enabled = true
+		if kind == "tea" or where == "tea" then e.aura = nil end
 	end
 	classCache[id] = kind
-	local g = db.fish[kind]
+	local g = GroupTable(kind)
 	g.items[#g.items + 1] = e
 	Rebuild()
 	Changed()
 	return true
 end
+ns.AddFish = ns.AddToGroup
 
 function ns.SetFishEnabled(e, on)
 	e.enabled = on and true or false
 	Changed()
 end
 
-function ns.SetFishOption(kind, key, value)
-	db.fish[kind][key] = value
+function ns.SetGroupOption(kind, key, value)
+	GroupTable(kind)[key] = value
 	Changed()
 end
+ns.SetFishOption = ns.SetGroupOption
 
 -- Switching to manual starts from the order you were just looking at.
 function ns.SetFishMode(kind, mode)
@@ -1124,16 +1356,16 @@ function ns.SetFishMode(kind, mode)
 	Changed()
 end
 
--- Manual order: swap with the neighboring shown row.
+-- Manual order (fish, Phial, Tea): swap with the neighboring shown row.
 function ns.MoveFish(kind, e, delta)
-	local shown = ns.FishOrder(kind)
+	local shown = ns.GroupOrder(kind)
 	local pos
 	for i, x in ipairs(shown) do
 		if x == e then pos = i end
 	end
 	local other = pos and shown[pos + delta]
 	if not other then return end
-	local items = db.fish[kind].items
+	local items = GroupTable(kind).items
 	local a, b
 	for i, x in ipairs(items) do
 		if x == e then a = i elseif x == other then b = i end
@@ -1199,7 +1431,7 @@ function ns.Reset()
 	needCleanup = RestoreCVars()
 	-- Keep things that aren't fishing settings: pending restores, sleep, minimap, debug.
 	local keep = { saved = db.saved, asleep = db.asleep, autoSlept = db.autoSlept, debug = db.debug,
-		minimapAngle = db.minimapAngle, minimapHidden = db.minimapHidden }
+		minimapAngle = db.minimapAngle, minimapHidden = db.minimapHidden, relaxedAura = db.relaxedAura }
 	wipe(db)
 	for k, v in pairs(keep) do db[k] = v end
 	ApplyDefaults()
@@ -1209,6 +1441,7 @@ function ns.Reset()
 	wipe(strikes)
 	wipe(backoff)
 	wipe(removed)
+	drinking = nil
 	Rebuild()
 	Changed()
 end
@@ -1384,7 +1617,18 @@ function handlers.UNIT_SPELLCAST_SUCCEEDED(_, _, spellID)
 	strikes[itemID] = nil
 	backoff[itemID] = nil
 	recent[itemID] = GetTime()
-	C_Timer.After(VERIFY_DELAY, function() VerifyUse(itemID) end)
+	local delay = VERIFY_DELAY
+	if groupOf[itemID] == "tea" then
+		-- Sitting down to drink: hold the key until Relaxed lands, then check it did.
+		local d = { item = itemID, time = GetTime() }
+		drinking = d
+		delay = ns.TEA_SECONDS + 1.5
+		-- Note the drink buff once it's up, so standing up early ends the wait
+		-- even if the key isn't pressed meanwhile.
+		C_Timer.After(0.5, function() if drinking == d and DrinkActive(itemID) then d.seen = true end end)
+		Changed()
+	end
+	C_Timer.After(delay, function() VerifyUse(itemID) end)
 end
 
 -- A refused use. It only counts toward a skip if the press had no other
@@ -1500,6 +1744,7 @@ local function Status()
 		Group(("%s (%s)"):format(ns.FISH_LABELS[kind], g.mode == "auto" and "Automatic" or "Manual Order"),
 			kind, ns.FishOrder(kind))
 	end
+	for _, kind in ipairs(ns.SUPPLY_KINDS) do Group(ns.SUPPLY_LABELS[kind], kind, ns.GroupOrder(kind)) end
 	for _, e in ipairs(db.baits) do Line("Other Bait", e, "baits") end
 	Print("Next Press: " .. ns.NextActionText())
 end

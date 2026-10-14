@@ -2,9 +2,9 @@
 
 **One key to re-buff, cast, and reel.** A lightweight fishing addon for World of Warcraft Retail (Midnight).
 
-Press your fishing key and Simply Fishing works out what you need next. It might put up your lure, refresh your bobber toy, throw back a fish for its buff, drop a raft if you're swimming, or simply cast. Once the line is out, the same key reels in the bobber. No mouse aiming, no action bar juggling.
+Press your fishing key and Simply Fishing works out what you need next. It might put up your lure, refresh your bobber toy, drink a phial or tea, throw back a fish for its buff, drop a raft if you're swimming, or simply cast. Once the line is out, the same key reels in the bobber. No mouse aiming, no action bar juggling.
 
-- **Version:** 1.0.0
+- **Version:** 1.1.0
 - **Game:** Retail, Midnight 12.1.5 (Interface 120105)
 - **Dependencies:** none (no Ace3, no LibStub, no LibDBIcon)
 - **Author:** Erdmann5150
@@ -15,8 +15,9 @@ Press your fishing key and Simply Fishing works out what you need next. It might
 
 - **Single-key fishing loop.** One keybind handles buffs, casting and reeling.
 - **Cast and Reel mode.** While your line is out, the key hooks the bobber using soft-target interact, so there's no need to click it.
-- **Automatic buff upkeep** for lures, bobber toys, the Oversized Bobber, throw-back fish and baits. Each is refreshed just before it runs out.
-- **Finds your fishing items by itself.** Lures, throw-back fish and other fish baits in your bags are detected and sorted automatically.
+- **Automatic buff upkeep** for lures, bobber toys, the Oversized Bobber, phials, teas, throw-back fish and baits. Each is refreshed just before it runs out.
+- **Finds your fishing items by itself.** Lures, throw-back fish, other fish baits, gathering phials and Relaxed teas in your bags are detected and sorted automatically.
+- **Phial and Tea.** Keeps one gathering phial and one tea up. The key waits while you drink so you don't stand up before becoming Relaxed, and a phial never replaces another flask you have up.
 - **Fish Buffs.** Fish you throw back for +25 Perception or +25 Fishing Skill are used in the order you choose, or automatically by whichever you have the most to spare.
 - **Stock control.** Every lure, fish and bait shows how many you have, and you can set a minimum to keep.
 - **Zone aware.** Lures and baits that only work in one place, like the Eerie Lure on The Coiled Isle, are only used there.
@@ -41,7 +42,7 @@ Press your fishing key and Simply Fishing works out what you need next. It might
 2. Click the **Keybind** button and press the key or mouse button you want to fish with.
 3. Stand by water and press it.
 
-Lures and throw-back fish in your bags are found automatically. Drag your raft and bobber toys onto their slots if the defaults aren't the ones you want.
+Lures, throw-back fish, phials and teas in your bags are found automatically. Drag your raft and bobber toys onto their slots if the defaults aren't the ones you want.
 
 ---
 
@@ -56,12 +57,16 @@ Every press re-checks your buffs and picks the first thing that's needed:
 | 3 | Lure | No lure buff, or it's about to run out |
 | 4 | Bobber toy | Its buff is missing or about to run out |
 | 5 | Oversized Bobber | Enabled, and its buff is missing or about to run out |
-| 6 | Perception fish | That buff is missing or about to run out |
-| 7 | Fishing Skill fish | That buff is missing or about to run out |
-| 8 | Other baits | Each bait's own buff is missing or about to run out |
-| 9 | **Cast Fishing** | Everything is up |
+| 6 | Phial | No phial buff, or it's about to run out, and no other flask or phial is up |
+| 7 | Tea | You aren't Relaxed, or it's about to run out, and you aren't swimming |
+| 8 | Perception fish | That buff is missing or about to run out |
+| 9 | Fishing Skill fish | That buff is missing or about to run out |
+| 10 | Other baits | Each bait's own buff is missing or about to run out |
+| 11 | **Cast Fishing** | Everything is up |
 
 "About to run out" means less than the **Refresh Buffs Under** time (21 seconds by default). Items you don't own, are at their Keep minimum, are unticked, are on cooldown, or only work in another zone are skipped. While the line is out in Cast and Reel mode, the key reels in instead.
+
+Phial and Tea come before fish buffs because they last 30 to 60 minutes, while a fish buff would tick away as you sit and drink. After a tea, the key does nothing until you're Relaxed (about 10 seconds), since casting would stand you up and waste the tea. **Next Press** shows **Wait, Relaxing** with the seconds left.
 
 The bottom of the settings window always shows **Next Press**, so you know exactly what the key will do.
 
@@ -122,8 +127,18 @@ Baits tied to one place, like the **Sulfurous Sludgefish** (Atal'Utek), are only
 
 If WoW reports a bait as unusable where you are when you add it, you'll get a note. Ignore it if the bait works when you right-click it.
 
+### Phial and Tea
+Gathering consumables that are found in your bags automatically and kept up while you fish. Each group has an on/off checkbox and keeps **one** item up, picked in your order (set with the arrows). Untick an item to keep it listed but never use it. Drag an item onto **Phial** or **Tea** to add one the scan didn't recognize.
+
+- **Phial:** gathering phials that give Finesse, Perception or Deftness, like the **Haranir Phial of Finesse** and **Haranir Phial of Perception**. Crafting phials and combat flasks are ignored. A phial replaces whatever flask or phial you have up, so while any other flask or phial is active the Phial group waits and its line says **Other Flask Up**. It never overwrites a raid flask.
+- **Tea:** teas that make you **Relaxed** after 10 seconds of drinking, like **Argentleaf Tea** (Finesse and Speed), **Sanguithorn Tea** (Perception and Speed) and **Azeroot Tea** (Deftness and Speed). Teas don't stack, so one is used. After you drink, the key waits until Relaxed lands. If you stand up early, nothing is held against the tea and the next press drinks again. A tea that doesn't make you Relaxed after you sat for the full time is skipped; drag it onto **Tea** again to retry.
+
+Up to 2 rows are shown per group. Extras are noted as "+N" on the group's line, and the item giving the buff is always kept on screen.
+
+It isn't confirmed how much Finesse, Perception or Deftness affect fishing. Untick a group if you'd rather not spend them.
+
 ### Have and Keep
-Every lure, fish and bait row shows **Have**, the number in your bags, and a **Keep** box. Once your stack is at or below its Keep number, that item stops being used and the next one in priority takes over. Keep is set per item; 0 uses them all. The count turns yellow when you're at your minimum.
+Every lure, phial, tea, fish and bait row shows **Have**, the number in your bags, and a **Keep** box. Once your stack is at or below its Keep number, that item stops being used and the next one in priority takes over. Keep is set per item; 0 uses them all. The count turns yellow when you're at your minimum.
 
 ### Status
 Status is shown once per buff, not repeated on every row. The Lures line and each fish buff's line show the time left. A small arrow and a green name mark the item giving the buff right now. Item rows only show a word when something needs your attention:
@@ -137,12 +152,14 @@ Status is shown once per buff, not repeated on every row. The Lures line and eac
 | No Buff Found | Using it gave no buff the addon can track |
 | Other Zone | A lure or bait that only works somewhere else (e.g. the Eerie Lure off The Coiled Isle) |
 
+Two more show on group lines only: **Other Flask Up** on Phial (another flask or phial is active, so none is used) and **Relaxing 6s** on Tea (you're drinking; the key waits).
+
 ### Footer
 | Setting | Default | What it does |
 |---|---|---|
 | Auto-Sleep in Instances | On | Sleeps in dungeons, raids, battlegrounds and arenas, and wakes when you leave |
 | Refresh Buffs Under | 21s | Renews a buff once it has less than this left. 21 seconds covers a full cast |
-| Scan Inventory | | Looks through your bags again from scratch, including items you removed this session |
+| Scan Inventory | | Looks through your bags again from scratch for lures, fish, baits, phials and teas, including items you removed this session |
 | Sleep / Wake | | Turns the addon off or on |
 | Reset Defaults | | Resets every setting and list (asks first) |
 | Debug | Off | Explains each key press in chat |
@@ -178,7 +195,7 @@ While asleep, the addon does no work and the fishing key does nothing. It only l
 | `/sfish` | Open or close the settings window |
 | `/sfish status` | Print every setting, item and the next action to chat |
 | `/sfish sleep` | Sleep or wake |
-| `/sfish scan` | Like the Scan Inventory button, plus a report of every lure and fish it sees and why it was or wasn't added |
+| `/sfish scan` | Like the Scan Inventory button, plus a report of every lure, fish, phial and tea it sees and why it was or wasn't added |
 | `/sfish debug` | Turn debug messages on or off |
 | `/sfish minimap` | Show or hide the minimap button |
 | `/sfish timer <seconds>` | Set Refresh Buffs Under (0 to 600) |
@@ -208,7 +225,13 @@ Make sure **Cast and Reel** is selected, and clear any selected NPC target, sinc
 Type `/sfish scan`. It re-checks your bags from scratch and says, for each lure or fish, whether it was added and if not, why: the list is full, its text hasn't loaded yet, or it wasn't recognized (with its Use text). Dragging the item onto the Lures or Other Baits slot always works too. Detection reads the item's description in English; on other client languages, drag fish onto the **Perception** or **Fishing Skill** name, or drag lures and baits onto their slots.
 
 **An item says "No Buff Found".**
-Using it didn't produce a buff the addon could track, so it's skipped. Remove it and add it again to retry.
+Using it didn't produce a buff the addon could track, so it's skipped. For lures and baits, remove it and add it again to retry. For fish, phials and teas, drag it onto its group's name again.
+
+**The phial is never used.**
+Check the Phial line. **Other Flask Up** means another flask or phial is active; a new phial would replace it, so the addon waits until it's gone.
+
+**The key does nothing for a few seconds after a tea.**
+That's on purpose: you need to stay seated for 10 seconds to become Relaxed. **Next Press** counts it down.
 
 **Something else looks wrong.**
 **Reset Defaults** in the footer starts clean. If you report a bug, include what `/sfish status` and `/sfish scan` print.
@@ -217,13 +240,22 @@ Using it didn't produce a buff the addon could track, so it's skipped. Remove it
 
 ## Known Limitations
 
-- Fish and lure detection by description only works on English clients. Other languages can drag items in by hand.
+- Fish, lure, phial and tea detection by description only works on English clients. Other languages can drag items in by hand. Known phials and teas are recognized by ID on any language.
+- The Relaxed buff is found by its English name until your first tea teaches the addon its ID, and the "other flask" check reads flask and phial names in English.
 - Guides disagree on how much Perception affects fishing. Fishing Skill is the safer buff if you only want one.
 - The minimap button uses a round-minimap layout and may sit slightly off on square minimap skins.
 
 ---
 
 ## Changelog
+
+### 1.1.0
+- New **Phial and Tea** section: gathering phials and Relaxed teas in your bags are found and kept up automatically, with Have, Keep, ticks and order arrows.
+- The key waits while you drink a tea so casting doesn't stand you up before Relaxed lands.
+- A phial is never used while another flask or phial is up, so it can't overwrite a raid flask.
+- Phials or teas added to Lures or Other Baits in 1.0 are moved to their new group.
+- Fish, phials and teas marked "No Buff Found" can be retried by dragging them onto their group's name again.
+- The settings window is a little wider to fit the new section.
 
 ### 1.0.0
 - Initial release.
