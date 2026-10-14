@@ -30,6 +30,30 @@ ns.KNOWN_FISH = {
 	[274587] = "perception", -- Spotted Killifish
 }
 
+-- Phial and Tea: gathering consumables found in your bags automatically.
+-- One of each is kept up. Teas don't stack with each other, and a phial
+-- replaces any other flask or phial you have up, so one per group.
+ns.SUPPLY_KINDS = { "phial", "tea" }
+ns.SUPPLY_LABELS = { phial = "Phial", tea = "Tea" }
+ns.MAX_SUPPLY_ROWS = 2 -- rows shown per group
+ns.KNOWN_PHIALS = {
+	[241311] = true, -- Haranir Phial of Finesse (quality 1)
+	[241310] = true, -- Haranir Phial of Finesse (quality 2)
+}
+ns.KNOWN_TEAS = {
+	[242298] = true, -- Argentleaf Tea (Finesse and Speed)
+	[242299] = true, -- Sanguithorn Tea (Perception and Speed)
+	[242301] = true, -- Azeroot Tea (Deftness and Speed)
+}
+-- Gathering stats a phial must mention, and crafting stats that rule one out (English clients).
+ns.PHIAL_STATS = { "finesse", "perception", "deftness" }
+ns.CRAFTING_STATS = { "ingenuity", "resourcefulness", "multicraft", "crafting speed" }
+-- Teas grant this buff after drinking seated for TEA_SECONDS. Its name is read
+-- in English until the addon learns the buff's ID from your first tea.
+ns.RELAXED = "Relaxed"
+ns.TEA_SECONDS = 10
+ns.TEA_WAIT = 12 -- longest the key waits on a tea before carrying on
+
 ns.defaults = {
 	mode = "reel",       -- "cast" or "reel"
 	threshold = 21,      -- refresh any buff with less than this many seconds left
