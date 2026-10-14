@@ -2,7 +2,8 @@ local _, ns = ...
 
 -- Built on first open, so the window costs nothing until it's used.
 -- The right column is wider: lure and bait rows carry bag count and Keep columns.
-local LEFT_W, RIGHT_W, ROW_H = 260, 400, 22
+-- The left column's Phial and Tea rows use a narrower version of the same row.
+local LEFT_W, RIGHT_W, ROW_H = 360, 400, 22
 local ROW_W = RIGHT_W - 10
 local W, H = LEFT_W + RIGHT_W + 60, 686
 local LEFT_X, RIGHT_X = 20 + LEFT_W / 2, 40 + LEFT_W + RIGHT_W / 2 -- column centers
@@ -11,6 +12,10 @@ local DIVIDER_X = 30 + LEFT_W
 -- Right edges of the fixed row columns, measured in from the row's right side.
 local COL_STATE, COL_KEEP, COL_HAVE = 24, 134, 170
 local STATE_W, KEEP_W, HAVE_W = 100, 30, 30
+-- Row geometry per column: center, width, and the right-edge offsets above.
+-- Left-column rows have no X button, so their status sits at the edge.
+local RIGHT_GEO = { cx = RIGHT_X, w = ROW_W, state = COL_STATE, stateW = STATE_W, keep = COL_KEEP, have = COL_HAVE }
+local LEFT_GEO = { cx = LEFT_X, w = LEFT_W - 10, state = 2, stateW = 84, keep = 92, have = 128 }
 local EMPTY_SLOT = "Interface\\PaperDoll\\UI-Backpack-EmptySlot"
 
 local frame, keyButton, capturing
@@ -113,7 +118,8 @@ local function ItemFromCursor()
 	end
 end
 
-local function ItemTooltip(owner, e, emptyText)
+-- group = the fish buff, "phial" or "tea" the item belongs to, if any.
+local function ItemTooltip(owner, e, emptyText, group)
 	GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
 	if not e then
 		GameTooltip:SetText(emptyText)
@@ -121,7 +127,9 @@ local function ItemTooltip(owner, e, emptyText)
 		return
 	end
 	GameTooltip:SetItemByID(e.item)
-	if e.aura then
+	if group == "tea" then
+		GameTooltip:AddLine("Tracks Buff: " .. ns.RELAXED .. " (drink for " .. ns.TEA_SECONDS .. " seconds)", 0.6, 0.8, 1)
+	elseif e.aura then
 		GameTooltip:AddLine("Tracks Buff: " .. (C_Spell.GetSpellName(e.aura) or e.aura), 0.6, 0.8, 1)
 	end
 	if e.keep then
@@ -129,7 +137,9 @@ local function ItemTooltip(owner, e, emptyText)
 	end
 	if e.noBuff then
 		GameTooltip:AddLine("This item gave no buff the addon can track, so it's skipped.", 1, 0.33, 0.33, true)
-		GameTooltip:AddLine("Remove and re-add it to try again.", 0.7, 0.7, 0.7)
+		local label = group and (ns.FISH_LABELS[group] or ns.SUPPLY_LABELS[group])
+		GameTooltip:AddLine(label and ("Drag it onto the " .. label .. " name again to retry.")
+			or "Remove and re-add it to try again.", 0.7, 0.7, 0.7)
 	end
 	local wait = ns.BackoffLeft(e.item)
 	if wait then
@@ -241,6 +251,7 @@ end
 ---------------------------------------------------------------------------
 
 local ROW_LEFT, ROW_RIGHT = RIGHT_X - ROW_W / 2, RIGHT_X + ROW_W / 2
+local LEFT_ROW_LEFT = LEFT_GEO.cx - LEFT_GEO.w / 2
 local ACTIVE_MARK = "Interface\\ChatFrame\\ChatFrameExpandArrow"
 
 -- Small tooltip for a widget that isn't an item.
@@ -256,13 +267,15 @@ end
 
 -- Row layout, left to right: [on/off] [priority arrow] icon [active marker] name;
 -- right to left: [X], status, Keep box, bag count.
--- opts: toggle, arrow, remove, fish (= buff kind), ownBuff (row shows its own buff time).
+-- opts: toggle, arrow, remove, fish (= buff kind), supply ("phial" or "tea"),
+-- ownBuff (row shows its own buff time), geo (column geometry, default right).
 local function CreateRow(list, i, y, opts)
+	local geo = opts.geo or RIGHT_GEO
 	local row = CreateFrame("Button", nil, frame)
-	row.list, row.fish, row.ownBuff = list, opts.fish, opts.ownBuff
-	row:SetSize(ROW_W, ROW_H - 2)
-	row:SetPoint("CENTER", frame, "TOPLEFT", RIGHT_X, y)
-	row:SetScript("OnEnter", function(self) ItemTooltip(self, self.entry) end)
+	row.list, row.fish, row.supply, row.ownBuff = list, opts.fish, opts.supply, opts.ownBuff
+	row:SetSize(geo.w, ROW_H - 2)
+	row:SetPoint("CENTER", frame, "TOPLEFT", geo.cx, y)
+	row:SetScript("OnEnter", function(self) ItemTooltip(self, self.entry, nil, self.fish or self.supply) end)
 	row:SetScript("OnLeave", GameTooltip_Hide)
 
 	local left = 2
@@ -276,6 +289,8 @@ local function CreateRow(list, i, y, opts)
 		if opts.fish then
 			HintTooltip(row.toggle, "Use This Fish",
 				"Untick to never throw this one back. Rare fish start unticked so they aren't wasted.")
+		elseif opts.supply then
+			HintTooltip(row.toggle, "Use This Item", "Untick to keep it listed but never use it.")
 		else
 			HintTooltip(row.toggle, "Use This Item",
 				"Untick to keep it listed but never use it. The X removes it until you log out or press Scan Inventory.")
@@ -290,7 +305,8 @@ local function CreateRow(list, i, y, opts)
 		row.up:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollUp-Down")
 		row.up:SetDisabledTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollUp-Disabled")
 		row.up:SetScript("OnClick", function()
-			if row.fish then ns.MoveFish(row.fish, row.entry, -1) else ns.MoveItem(list, row.index, -1) end
+			local group = row.fish or row.supply
+			if group then ns.MoveFish(group, row.entry, -1) else ns.MoveItem(list, row.index, -1) end
 		end)
 		left = left + 20
 	end
@@ -312,22 +328,22 @@ local function CreateRow(list, i, y, opts)
 	end
 
 	row.state = Font(row, "")
-	row.state:SetWidth(STATE_W)
+	row.state:SetWidth(geo.stateW)
 	row.state:SetJustifyH("RIGHT")
 	row.state:SetWordWrap(false)
-	row.state:SetPoint("RIGHT", -COL_STATE, 0)
+	row.state:SetPoint("RIGHT", -geo.state, 0)
 
 	row.keepBox = NumberBox(row, KEEP_W,
 		function() return row.entry and (row.entry.keep or 0) or "" end,
 		function(n) if row.entry then ns.SetKeep(row.entry, n) end end, 0, 999)
-	row.keepBox:SetPoint("RIGHT", -COL_KEEP, 0)
+	row.keepBox:SetPoint("RIGHT", -geo.keep, 0)
 	HintTooltip(row.keepBox, "Keep",
 		"Stop using this item once you have this many or fewer in your bags. 0 uses them all.")
 
 	row.have = Font(row, "", "GameFontHighlightSmall")
 	row.have:SetWidth(HAVE_W)
 	row.have:SetJustifyH("RIGHT")
-	row.have:SetPoint("RIGHT", -COL_HAVE, 0)
+	row.have:SetPoint("RIGHT", -geo.have, 0)
 
 	row.name = Font(row, "", "GameFontHighlightSmall")
 	row.name:SetJustifyH("LEFT")
@@ -382,11 +398,13 @@ local function FillRow(row, e, i, active)
 end
 
 -- Gray "Have" and "Keep" labels, placed directly above a list's first row.
-local function ColumnLabels(y)
+local function ColumnLabels(y, geo)
+	geo = geo or RIGHT_GEO
+	local right = geo.cx + geo.w / 2
 	local have = Font(frame, "Have", "GameFontDisableSmall")
-	have:SetPoint("CENTER", frame, "TOPLEFT", ROW_RIGHT - COL_HAVE - HAVE_W / 2, y)
+	have:SetPoint("CENTER", frame, "TOPLEFT", right - geo.have - HAVE_W / 2, y)
 	local keep = Font(frame, "Keep", "GameFontDisableSmall")
-	keep:SetPoint("CENTER", frame, "TOPLEFT", ROW_RIGHT - COL_KEEP - KEEP_W / 2, y)
+	keep:SetPoint("CENTER", frame, "TOPLEFT", right - geo.keep - KEEP_W / 2, y)
 	return { have, keep }
 end
 
@@ -584,6 +602,61 @@ local function FishGroup(kind, y)
 	lists[#lists + 1] = l
 end
 
+-- Phial or Tea (left column): [on] Name, its status and the column labels on
+-- one line, then compact rows. Drop an item on the name to add it.
+local SUPPLY_TIPS = {
+	phial = "Keeps one gathering phial (Finesse, Perception or Deftness) up, picked in your order. "
+		.. "Waits while you have another flask or phial up, so it never replaces one.",
+	tea = "Keeps you Relaxed with one tea, picked in your order. After drinking, the key waits "
+		.. ns.TEA_SECONDS .. " seconds so casting doesn't stand you up before Relaxed lands.",
+}
+
+local function SupplyGroup(kind, y)
+	local label = ns.SUPPLY_LABELS[kind]
+	local cb = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+	cb:SetSize(24, 24)
+	cb:SetPoint("LEFT", frame, "TOPLEFT", LEFT_ROW_LEFT - 2, y)
+	local name = Font(frame, label, "GameFontNormal")
+	name:SetPoint("LEFT", cb, "RIGHT", 2, 0)
+	ExtendHitRect(cb, name)
+	local function Drop()
+		local id = ItemFromCursor()
+		if id then Report(ns.AddToGroup(kind, id)) end
+		return id
+	end
+	cb:SetScript("OnReceiveDrag", Drop)
+	cb:SetScript("OnClick", function(self)
+		if Drop() then
+			self:SetChecked(ns.db.supplies[kind].on) -- a drop, not a toggle
+		else
+			ns.SetGroupOption(kind, "on", self:GetChecked() and true or false)
+		end
+	end)
+	HintTooltip(cb, "Keep " .. label .. " Up", SUPPLY_TIPS[kind]
+		.. " Found in your bags automatically; drag one onto this name to add it by hand.")
+	refreshers[#refreshers + 1] = function() cb:SetChecked(ns.db.supplies[kind].on) end
+
+	local status = Font(frame, "", "GameFontHighlightSmall")
+	status:SetPoint("LEFT", frame, "TOPLEFT", LEFT_ROW_LEFT + 60, y)
+
+	local l = { key = kind, supply = kind, statusGroup = kind, status = status, rows = {} }
+	l.labels = ColumnLabels(y, LEFT_GEO)
+	local rowsY = y - 22
+	for i = 1, ns.MAX_SUPPLY_ROWS do
+		l.rows[i] = CreateRow(kind, i, rowsY - (i - 1) * ROW_H,
+			{ toggle = true, arrow = true, supply = kind, geo = LEFT_GEO })
+	end
+	l.empty = Font(frame, "None found. Drag one onto the name.", "GameFontDisableSmall")
+	l.empty:SetPoint("CENTER", frame, "TOPLEFT", LEFT_X, rowsY)
+	lists[#lists + 1] = l
+end
+
+local function BuildPhialAndTea()
+	Header("Phial and Tea", LEFT_X, -446)
+	SupplyGroup("phial", -470)
+	SupplyGroup("tea", -470 - 22 - ns.MAX_SUPPLY_ROWS * ROW_H - 2)
+end
+
 local function BuildLuresAndBaits()
 	ListSection("lures", "Lures", ns.MAX_LURES, -36, {
 		arrow = true, statusGroup = "lures",
@@ -644,6 +717,7 @@ local function Build()
 	BuildCasting()
 	BuildSound()
 	BuildBobberAndRaft()
+	BuildPhialAndTea()
 	BuildLuresAndBaits()
 
 	nextText = Font(frame, "", "GameFontNormal")
@@ -663,12 +737,12 @@ local function Build()
 	local autoCb, autoFs = Check("Auto-Sleep in Instances", "autoSleep",
 		"Sleeps in dungeons, raids, battlegrounds and arenas, and wakes when you leave if it was awake when you went in.")
 
-	-- One refresh time for every lure, fish and bait buff.
+	-- One refresh time for every buff.
 	local refreshFs = Font(frame, "Refresh Buffs Under", "GameFontHighlight")
 	local refreshBox = NumberBox(frame, 34, function() return ns.db.threshold end,
 		function(n) ns.SetOption("threshold", math.floor(n)) end, 0, 600)
 	HintTooltip(refreshBox, "Refresh Buffs Under",
-		"A lure, fish or bait buff is renewed once it has less than this many seconds left. "
+		"A lure, phial, tea, fish or bait buff is renewed once it has less than this many seconds left. "
 		.. "21 covers a full cast, so a buff never drops mid-cast.")
 	refreshers[#refreshers + 1] = refreshBox.Refresh
 	HStack(W / 2, -(H - 53), 6, autoCb, autoFs, 24, refreshFs, refreshBox, Font(frame, "s", "GameFontHighlight"))
@@ -680,7 +754,7 @@ local function Build()
 		ns.RefreshUI()
 	end)
 	HintTooltip(scan, "Scan Inventory",
-		"Looks through your bags again from scratch for lures, fish and baits, including ones you removed this session. "
+		"Looks through your bags again from scratch for lures, fish, baits, phials and teas, including ones you removed this session. "
 		.. "For a full report of what it sees, type /sfish scan.")
 	HStack(W / 2, -(H - 25), 10, scan, sleepButton, reset)
 
@@ -728,7 +802,7 @@ function ns.RefreshUI()
 	fishEmpty:SetShown(not anyFish)
 
 	for _, l in ipairs(lists) do
-		local items = l.fish and ns.FishOrder(l.fish) or ns.db[l.key]
+		local items = (l.fish or l.supply) and ns.GroupOrder(l.key) or ns.db[l.key]
 		local hidden = l.fish and not anyFish
 		local active
 		local more = ""
@@ -743,10 +817,10 @@ function ns.RefreshUI()
 				local onScreen = false
 				for i = 1, n do if shown[i] == active then onScreen = true end end
 				if active and not onScreen then shown[n] = active end
-				more = ("  |cff808080(+%d more)|r"):format(#items - n)
+				more = (l.supply and "  |cff808080+%d|r" or "  |cff808080(+%d more)|r"):format(#items - n)
 				items = shown
 			end
-			if l.fish then
+			if l.fish or l.supply then
 				l.status:SetText(txt and (color .. txt .. "|r" .. more) or "")
 			else
 				l.status:SetText(txt and ("Lure Buff: " .. color .. txt .. "|r") or "")
@@ -756,7 +830,7 @@ function ns.RefreshUI()
 		for i, row in ipairs(l.rows) do FillRow(row, not hidden and items[i] or nil, i, active) end
 		l.empty:SetShown(empty and not hidden)
 		for _, w in ipairs(l.labels) do w:SetShown(not empty and not hidden) end
-		if l.status and not l.fish then l.status:SetShown(not empty) end
+		if l.status and not l.fish and not l.supply then l.status:SetShown(not empty) end
 		for _, w in ipairs(l.line or {}) do w:SetShown(not hidden) end
 	end
 	if ns.db.asleep then
