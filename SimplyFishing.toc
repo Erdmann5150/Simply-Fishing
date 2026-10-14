@@ -2,7 +2,7 @@
 ## Title: Simply Fishing
 ## Notes: One key to re-buff, cast and reel. Type /sfish for settings.
 ## Author: Erdmann5150
-## Version: 1.0.0
+## Version: 1.1.0
 ## Category: Professions
 ## Category-deDE: Berufe
 ## Category-esES: Profesiones
